@@ -1,12 +1,13 @@
 #include <Wire.h>
 #include <HardwareSerial.h>
 
-#define TLX493D_ADDRESS 0x35 // Indirizzo I2C del sensore
-#define NUM_BUTTONS 4        // Numero di pulsanti sul dispositivo (provvisorio da definire come ponout)
+#define TLX493D_ADDRESS 0x35 // Indirizzo I2C del sensore e' ERRATO
+#define NUM_BUTTONS 4        // Numero di pulsanti sul dispositivo da finire di implementare
 
-float bx = 0.0, by = 0.0, bz = 0.0; // Variabili per i dati magnetici 
+float bx = 0.0, by = 0.0, bz = 0.0; // Variabili per i dati magnetici
 bool sendDataEnabled = false;       // Flag per abilitare l'invio dei dati
-uint16_t buttonStates = 0x0000;     // Stato dei pulsanti (4 bit) - da verificare come legge questi bit (max 16) il demone spacenav
+bool binaryModeEnabled = false;     // Flag per abilitare la modalità binaria
+uint16_t buttonStates = 0x0000;     // Stato dei pulsanti (4 bit)
 
 // Inizializzare il sensore magnetico
 void initSensor() {
@@ -17,7 +18,7 @@ void initSensor() {
     Wire.endTransmission();
 }
 
-// Aggiorna lo stato dei pulsanti (DEBUG simula i pulsanti anche se non ci sono)
+// Aggiorna lo stato dei pulsanti (DEBUG)
 void updateButtonStates() {
     static bool toggle = false;
     toggle = !toggle;
@@ -29,10 +30,10 @@ void readMagneticField() {
     uint8_t buffer[6];
 
     Wire.beginTransmission(TLX493D_ADDRESS);
-    Wire.write(0x00); 
+    Wire.write(0x00);
     Wire.endTransmission();
 
-    Wire.requestFrom(TLX493D_ADDRESS, 6); // Legge 6 byte
+    Wire.requestFrom(TLX493D_ADDRESS, 6); // Legge 6 byte perchè non ci interessa la temperatura 
     for (int i = 0; i < 6; i++) {
         if (Wire.available()) {
             buffer[i] = Wire.read();
@@ -45,8 +46,8 @@ void readMagneticField() {
     bz = (float)((int16_t)((buffer[4] << 8) | buffer[5])) / 1000.0;
 }
 
-// Funzione per inviare un pacchetto di dati SpaceNav
-void sendSpaceNavPacket() {
+// Invia i dati in formato binario
+void sendBinaryPacket() {
     int16_t trans_x = (int16_t)(bx * 1000);
     int16_t trans_y = (int16_t)(by * 1000);
     int16_t trans_z = (int16_t)(bz * 1000);
@@ -62,52 +63,67 @@ void sendSpaceNavPacket() {
     memcpy(packet + 6, &rot_x, 2);
     memcpy(packet + 8, &rot_y, 2);
     memcpy(packet + 10, &rot_z, 2);
-    memcpy(packet + 12, &buttonStates, 2); // Stato dei pulsanti(forse)
+    memcpy(packet + 12, &buttonStates, 2);
 
-    Serial.write(packet, 14); // Invia i pacchetti binari
+    Serial.write(packet, 14); // Invia pacchetto binario
 }
 
-// Funzione per gestire i comandi SpaceNav (principalmente inizializzazione)
+// Invia i dati in formato testuale
+void sendTextualPacket() {
+    Serial.print("X:");
+    Serial.print(bx, 3);
+    Serial.print(" Y:");
+    Serial.print(by, 3);
+    Serial.print(" Z:");
+    Serial.print(bz, 3);
+    Serial.print(" Buttons:");
+    Serial.println(buttonStates, BIN);
+}
+
+// Gestisce i comandi SpaceNav
 void processSpaceNavCommands() {
     if (Serial.available() > 0) {
         String command = Serial.readStringUntil('\r'); // Legge il comando
 
         if (command == "@RESET") {
-            // Risponde con identificazione dopo il reset
             sendDataEnabled = false;
-            Serial.print("@1\r"); //la risposta deve iniziare per @1 poi ci può essere un treno di dati che identifica anche i pulsanti da capire bene
+            Serial.print("@1 MAGELLAN Version 6.70\r"); //provvisorio per far identificare la nostra scheda al client 
         } else if (command == "vQ") {
-            // Risposta a vQ per identificazione
             Serial.print("vMagellan SpaceMouse\r");
         } else if (command == "m3") {
-           // Abilita la compresisone dari ma non ho capito in che casistica si usa
-        } else if (command == "c3B") {
-        // Abilita modalità binaria (movimenti 3D) noi abbiamo solo quella quindi non fa un cazzo
-        } else if (command == "MSSV") { //Abilita invio darti binari 
+            binaryModeEnabled = true;
+//DEBUG            Serial.print("OK\r");
+        } else if (command == "t3") { // comando per modalità testuale NON previsto da spacenav 
+            binaryModeEnabled = false;
+//DEBUG            Serial.print("OK\r");
+        } else if (command == "MSSV") {
             sendDataEnabled = true;
-        } else if (command == "k") { 
-            //Qualcosa che ha a che fare con i tasti ma non so in che modo 
+//DEBUG            Serial.print("OK\r");
         }
     }
 }
 
 void setup() {
-    Serial.begin(9600); 
-    Wire.begin();       
-    initSensor();       // sensore magnetico
-
-    // Disabilita inizialmente l'invio dei dati e la modalità binaria (perchè attende il resetper l'inizializzazione)
-    sendDataEnabled = false;
+    Serial.begin(9600); // Configura la comunicazione seriale
+    Wire.begin();       // Inizializza I2C
+    initSensor();       // Configura il sensore
+    sendDataEnabled = false; // Attende comando per iniziare invio dati
 }
 
 void loop() {
     processSpaceNavCommands(); // Gestisce i comandi SpaceNav
     updateButtonStates();      // Aggiorna lo stato dei pulsanti
 
-    // Invia i pacchetti solo se abilitato
     if (sendDataEnabled) {
         readMagneticField();
-        sendSpaceNavPacket();
-        delay(10); // Frequenza di invio deve essere di 100 Hz
+
+        // Invia i dati in modalità binaria o testuale
+        if (binaryModeEnabled) {
+            sendBinaryPacket();
+        } else {
+            sendTextualPacket();
+        }
+
+        delay(10); // Frequenza di invio: 100 Hz
     }
 }
