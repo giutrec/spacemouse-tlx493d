@@ -1,52 +1,46 @@
 #include <Wire.h>
-#include <HardwareSerial.h>
+#include "TLx493D_inc.hpp"
 
-#define TLX493D_ADDRESS 0x35 // Indirizzo I2C del sensore e' ERRATO
-#define NUM_BUTTONS 4        // Numero di pulsanti sul dispositivo da finire di implementare
+using namespace ifx::tlx493d;
+
+// Configurazione del sensore
+const uint8_t POWER_PIN = 15; // Pin di alimentazione (VA ALIMENTATO)
+TLx493D_A1B6 dut(Wire, TLx493D_IIC_ADDR_A0_e); // Configura il sensore con l'indirizzo corretto
 
 float bx = 0.0, by = 0.0, bz = 0.0; // Variabili per i dati magnetici
 bool sendDataEnabled = false;       // Flag per abilitare l'invio dei dati
 bool binaryModeEnabled = false;     // Flag per abilitare la modalità binaria
-uint16_t buttonStates = 0x0000;     // Stato dei pulsanti (4 bit)
+uint16_t buttonStates = 0x0000;     // Stato dei pulsanti (4 bit, inizialmente disattivati ancora da definire pin)
 
-// Inizializzare il sensore magnetico
+// Inizializza il sensore magnetico
 void initSensor() {
-    Wire.begin();
-    Wire.beginTransmission(TLX493D_ADDRESS);
-    Wire.write(0x00);
-    Wire.write(0x01);
-    Wire.endTransmission();
-}
+    // Configura il pin di alimentazione
+    pinMode(POWER_PIN, OUTPUT);
+    digitalWrite(POWER_PIN, HIGH); // Accende il sensore
+    delay(250); // Attesa per la stabilizzazione del sensore
 
-// Aggiorna lo stato dei pulsanti (DEBUG)
-void updateButtonStates() {
-    static bool toggle = false;
-    toggle = !toggle;
-    buttonStates = toggle ? 0b00001111 : 0b00000000; // Simula alternanza
+    // Inizializza il sensore tramite la libreria
+    if (!dut.begin()) {
+        Serial.println("Errore: Impossibile inizializzare il sensore."); //DEBUG
+        while (1); // Arresta il programma
+    }
+    Serial.println("Sensore inizializzato correttamente."); //DEBUG
 }
 
 // Legge i dati dal sensore magnetico
 void readMagneticField() {
-    uint8_t buffer[6];
+    double x, y, z;
 
-    Wire.beginTransmission(TLX493D_ADDRESS);
-    Wire.write(0x00);
-    Wire.endTransmission();
-
-    Wire.requestFrom(TLX493D_ADDRESS, 6); // Legge 6 byte perchè non ci interessa la temperatura 
-    for (int i = 0; i < 6; i++) {
-        if (Wire.available()) {
-            buffer[i] = Wire.read();
-        }
+    if (dut.getMagneticField(&x, &y, &z)) {
+        bx = x; // Assegna i valori letti alle variabili
+        by = y;
+        bz = z;
+    } else {
+        Serial.println("Errore: Lettura dei dati dal sensore fallita!"); //DEBUG
     }
-
-    // Converti i dati grezzi in float
-    bx = (float)((int16_t)((buffer[0] << 8) | buffer[1])) / 1000.0;
-    by = (float)((int16_t)((buffer[2] << 8) | buffer[3])) / 1000.0;
-    bz = (float)((int16_t)((buffer[4] << 8) | buffer[5])) / 1000.0;
 }
 
-// Invia i dati in formato binario
+// Invia i dati in formato binario in formato spacenav credo non funzioni
 void sendBinaryPacket() {
     int16_t trans_x = (int16_t)(bx * 1000);
     int16_t trans_y = (int16_t)(by * 1000);
@@ -68,7 +62,7 @@ void sendBinaryPacket() {
     Serial.write(packet, 14); // Invia pacchetto binario
 }
 
-// Invia i dati in formato testuale
+// Invia i dati in formato testuale, modalità provvisoria di debug
 void sendTextualPacket() {
     Serial.print("X:");
     Serial.print(bx, 3);
@@ -80,25 +74,26 @@ void sendTextualPacket() {
     Serial.println(buttonStates, BIN);
 }
 
-// Gestisce i comandi SpaceNav
+// Gestisce i comandi SpaceNav (CIRCA)
 void processSpaceNavCommands() {
     if (Serial.available() > 0) {
         String command = Serial.readStringUntil('\r'); // Legge il comando
 
         if (command == "@RESET") {
             sendDataEnabled = false;
-            Serial.print("@1 MAGELLAN Version 6.70\r"); //provvisorio per far identificare la nostra scheda al client 
+            Serial.print("@1 SPACEMOUSE Version 0.1\r");
         } else if (command == "vQ") {
             Serial.print("vMagellan SpaceMouse\r");
         } else if (command == "m3") {
+            //capire a cosa serve
+        } else if (command == "k") {
+            //capire a cosa serve
+        } else if (command == "CB") {     //Credo sia la modalità 3d
             binaryModeEnabled = true;
-//DEBUG            Serial.print("OK\r");
-        } else if (command == "t3") { // comando per modalità testuale NON previsto da spacenav 
+        } else if (command == "t3") { // Modalità testuale (non standard)
             binaryModeEnabled = false;
-//DEBUG            Serial.print("OK\r");
         } else if (command == "MSSV") {
             sendDataEnabled = true;
-//DEBUG            Serial.print("OK\r");
         }
     }
 }
@@ -112,7 +107,6 @@ void setup() {
 
 void loop() {
     processSpaceNavCommands(); // Gestisce i comandi SpaceNav
-    updateButtonStates();      // Aggiorna lo stato dei pulsanti
 
     if (sendDataEnabled) {
         readMagneticField();
